@@ -439,7 +439,32 @@ func TestParser_ParseDirectory(t *testing.T) {
 									"+Foo": "true",
 									"+Bar": "123",
 								},
-								Methods:        map[string]*parse.FuncInfo{},
+								Methods: map[string]*parse.FuncInfo{
+									"Test6": {
+										Name: "Test6",
+										Markers: map[string]string{
+											"+Foo": "true",
+											"+Bar": "123",
+										},
+										FuncDefInfo: &parse.FuncDefInfo{
+											Params: []*parse.ParamInfo{
+												{
+													Name: "arg",
+													TypeInfo: &parse.TypeInfo{
+														TypeName:         "Field",
+														ExternalTypeName: "functions.Field",
+														IsStruct:         true,
+														IsType:           true,
+														TypeOf:           &parse.TypeInfo{IsStruct: true},
+													},
+												},
+											},
+											Results: []*parse.ResultInfo{},
+										},
+										HasReciver:  true,
+										ReciverName: "Reference",
+									},
+								},
 								Fields:         map[string]*parse.FieldInfo{},
 								EmbeddedFields: map[string]parse.EmbeddedFieldInfo{},
 							},
@@ -546,7 +571,7 @@ func TestParser_ParseDirectory(t *testing.T) {
 									Results: []*parse.ResultInfo{},
 								},
 							},
-							"Test5": {
+							"Field.Test5": {
 								Name: "Test5",
 								Markers: map[string]string{
 									"+Foo": "true",
@@ -570,7 +595,7 @@ func TestParser_ParseDirectory(t *testing.T) {
 								HasReciver:  true,
 								ReciverName: "Field",
 							},
-							"Test6": {
+							"Reference.Test6": {
 								Name: "Test6",
 								Markers: map[string]string{
 									"+Foo": "true",
@@ -591,6 +616,8 @@ func TestParser_ParseDirectory(t *testing.T) {
 									},
 									Results: []*parse.ResultInfo{},
 								},
+								HasReciver:  true,
+								ReciverName: "Reference",
 							},
 							"Variadic": {
 								Name:    "Variadic",
@@ -1046,6 +1073,93 @@ func TestParser_ParseDirectory(t *testing.T) {
 									"+test:word2": "value",
 									"+test:word":  "This is the use for blah blah blah blah",
 								},
+								FuncDefInfo: &parse.FuncDefInfo{
+									Params:  []*parse.ParamInfo{},
+									Results: []*parse.ResultInfo{},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "method name collisions across structs",
+			args: args{
+				path: "./_testdata/methodcollision",
+			},
+			want: &parse.Results{
+				Packages: map[string]*parse.PackageInfo{
+					"methodcollision": {
+						Name:         "methodcollision",
+						Constants:    map[string]*parse.ConstantInfo{},
+						DefinedTypes: map[string]*parse.DefinedTypeInfo{},
+						Aliases:      map[string]*parse.AliasTypeInfo{},
+						Interfaces:   map[string]*parse.InterfaceInfo{},
+						Vars:         map[string]*parse.VarInfo{},
+						Structs: map[string]*parse.StructInfo{
+							"A": {
+								Name:           "A",
+								Markers:        map[string]string{},
+								Fields:         map[string]*parse.FieldInfo{},
+								EmbeddedFields: map[string]parse.EmbeddedFieldInfo{},
+								Methods: map[string]*parse.FuncInfo{
+									"Validate": {
+										Name:    "Validate",
+										Markers: map[string]string{},
+										FuncDefInfo: &parse.FuncDefInfo{
+											Params:  []*parse.ParamInfo{},
+											Results: []*parse.ResultInfo{},
+										},
+										HasReciver:  true,
+										ReciverName: "A",
+									},
+								},
+							},
+							"B": {
+								Name:           "B",
+								Markers:        map[string]string{},
+								Fields:         map[string]*parse.FieldInfo{},
+								EmbeddedFields: map[string]parse.EmbeddedFieldInfo{},
+								Methods: map[string]*parse.FuncInfo{
+									"Validate": {
+										Name:    "Validate",
+										Markers: map[string]string{},
+										FuncDefInfo: &parse.FuncDefInfo{
+											Params:  []*parse.ParamInfo{},
+											Results: []*parse.ResultInfo{},
+										},
+										HasReciver:  true,
+										ReciverName: "B",
+									},
+								},
+							},
+						},
+						Functions: map[string]*parse.FuncInfo{
+							"A.Validate": {
+								Name:    "Validate",
+								Markers: map[string]string{},
+								FuncDefInfo: &parse.FuncDefInfo{
+									Params:  []*parse.ParamInfo{},
+									Results: []*parse.ResultInfo{},
+								},
+								HasReciver:  true,
+								ReciverName: "A",
+							},
+							"B.Validate": {
+								Name:    "Validate",
+								Markers: map[string]string{},
+								FuncDefInfo: &parse.FuncDefInfo{
+									Params:  []*parse.ParamInfo{},
+									Results: []*parse.ResultInfo{},
+								},
+								HasReciver:  true,
+								ReciverName: "B",
+							},
+							"Validate": {
+								Name:    "Validate",
+								Markers: map[string]string{},
 								FuncDefInfo: &parse.FuncDefInfo{
 									Params:  []*parse.ParamInfo{},
 									Results: []*parse.ResultInfo{},

@@ -347,15 +347,9 @@ func handleFuncDecl(node *ast.FuncDecl, pi *PackageInfo, fileCache fileCachedDat
 	params := fieldListToParamInfoList(node.Type.Params, fileCache)
 	results := fieldListToResultInfoList(node.Type.Results, fileCache)
 
-	receiverTypeName := ""
-	if node.Recv != nil && len(node.Recv.List) > 0 {
-		receiverType, ok := node.Recv.List[0].Type.(*ast.Ident)
-		if ok {
-			receiverTypeName = receiverType.Name
-		}
-	}
+	receiverTypeName := receiverTypeNameOf(node.Recv)
 
-	pi.Functions[node.Name.Name] = &FuncInfo{
+	fn := &FuncInfo{
 		Name:        node.Name.Name,
 		HasReciver:  receiverTypeName != "",
 		ReciverName: receiverTypeName,
@@ -368,11 +362,46 @@ func handleFuncDecl(node *ast.FuncDecl, pi *PackageInfo, fileCache fileCachedDat
 		},
 	}
 
+	pi.Functions[functionKey(receiverTypeName, node.Name.Name)] = fn
+
 	for i := range pi.Structs {
 		if receiverTypeName == pi.Structs[i].Name {
-			pi.Structs[i].Methods[node.Name.Name] = pi.Functions[node.Name.Name]
+			pi.Structs[i].Methods[node.Name.Name] = fn
 		}
 	}
+}
+
+// receiverTypeNameOf extracts the receiver's base type name from a method
+// receiver list, unwrapping a pointer receiver (e.g. (*T)) to its underlying
+// type name. It returns "" for a plain function (no receiver) or a receiver
+// whose type is not a simple (optionally pointer) identifier.
+func receiverTypeNameOf(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 {
+		return ""
+	}
+
+	switch expr := recv.List[0].Type.(type) {
+	case *ast.Ident:
+		return expr.Name
+	case *ast.StarExpr:
+		if ident, ok := expr.X.(*ast.Ident); ok {
+			return ident.Name
+		}
+	}
+
+	return ""
+}
+
+// functionKey builds the key under which a function or method is stored in
+// PackageInfo.Functions. Methods are qualified by their receiver type
+// (receiver.method) so that same-named methods on different types do not
+// collide; plain functions keep their bare name.
+func functionKey(receiverTypeName, name string) string {
+	if receiverTypeName == "" {
+		return name
+	}
+
+	return receiverTypeName + "." + name
 }
 
 type fileCachedData struct {
