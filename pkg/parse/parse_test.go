@@ -1024,6 +1024,39 @@ func TestParser_ParseDirectory(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "heredoc markers",
+			args: args{
+				path: "./_testdata/heredoc",
+			},
+			want: &parse.Results{
+				Packages: map[string]*parse.PackageInfo{
+					"heredoc": {
+						Name:         "heredoc",
+						Constants:    map[string]*parse.ConstantInfo{},
+						DefinedTypes: map[string]*parse.DefinedTypeInfo{},
+						Aliases:      map[string]*parse.AliasTypeInfo{},
+						Structs:      map[string]*parse.StructInfo{},
+						Interfaces:   map[string]*parse.InterfaceInfo{},
+						Vars:         map[string]*parse.VarInfo{},
+						Functions: map[string]*parse.FuncInfo{
+							"Example": {
+								Name: "Example",
+								Markers: map[string]string{
+									"+test:word2": "value",
+									"+test:word":  "This is the use for blah blah blah blah",
+								},
+								FuncDefInfo: &parse.FuncDefInfo{
+									Params:  []*parse.ParamInfo{},
+									Results: []*parse.ResultInfo{},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

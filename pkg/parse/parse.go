@@ -3,12 +3,16 @@ package parse
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
-	"golang.org/x/tools/go/packages"
+	"io/fs"
 	"log"
+	"path"
 	"reflect"
 	"regexp"
 	"strings"
+
+	"golang.org/x/tools/go/packages"
 )
 
 type PackageInfo struct {
@@ -402,65 +406,140 @@ func (p *Parser) ParseDirectory(opts Options) (*Results, error) {
 	}
 
 	for _, pkg := range pkgs {
-		pi := &PackageInfo{
-			Name:         pkg.Name,
-			Structs:      map[string]*StructInfo{},
-			Functions:    map[string]*FuncInfo{},
-			Interfaces:   map[string]*InterfaceInfo{},
-			Vars:         map[string]*VarInfo{},
-			Constants:    map[string]*ConstantInfo{},
-			DefinedTypes: map[string]*DefinedTypeInfo{},
-			Aliases:      map[string]*AliasTypeInfo{},
-		}
+		pi := newPackageInfo(pkg.Name)
+
 		for _, file := range pkg.Syntax {
-			fileCacheData := fileCachedData{
-				commentGroups: map[token.Pos]*ast.CommentGroup{},
-				imports:       map[string]*ast.ImportSpec{},
-				packageName:   pkg.Name,
-			}
-
-			skipFile := false
-			for i := range file.Comments {
-				for j := range opts.SkipFilesWithContentsRegex {
-					if opts.SkipFilesWithContentsRegex[j].MatchString(file.Comments[i].Text()) {
-						skipFile = true
-						break
-					}
-				}
-			}
-			if skipFile {
-				continue
-			}
-
-			ast.Inspect(file, func(n ast.Node) bool {
-				switch node := n.(type) {
-				case *ast.ValueSpec:
-					handleValueSpec(node, pi, fileCacheData)
-				case *ast.FuncDecl:
-					handleFuncDecl(node, pi, fileCacheData)
-				case *ast.CommentGroup:
-					fileCacheData.commentGroups[node.End()] = node
-				case *ast.ImportSpec:
-					if node.Name == nil {
-						fileCacheData.imports[strings.ReplaceAll(node.Path.Value, "\"", "")] = node
-					} else {
-						fileCacheData.imports[node.Name.Name] = node
-					}
-
-				case *ast.TypeSpec:
-					handleTypeSpec(node, pi, fileCacheData)
-
-				default:
-				}
-
-				return true
-			})
+			inspectFile(file, pi, opts.SkipFilesWithContentsRegex)
 		}
 
 		results.Packages[pi.Name] = pi
 	}
 
 	return results, err
+}
+
+// ParseEmbed parses Go source files from an fs.FS (e.g. an embed.FS populated
+// via //go:embed) and returns the same *Results structure as ParseDirectory.
+// opts.Path selects the root directory within the FS; an empty string defaults
+// to ".". opts.SkipFilesWithContentsRegex is applied identically to ParseDirectory.
+func (p *Parser) ParseEmbed(fsys fs.FS, opts Options) (*Results, error) {
+	root := opts.Path
+	if root == "" {
+		root = "."
+	}
+
+	results := &Results{
+		Packages: map[string]*PackageInfo{},
+	}
+
+	// pkgFiles groups parsed AST files by package name, mirroring how
+	// packages.Load groups by pkg.Name in ParseDirectory.
+	pkgFiles := map[string][]*ast.File{}
+	fset := token.NewFileSet()
+
+	err := fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() || !isGoSourceFile(p) {
+			return nil
+		}
+
+		data, readErr := fs.ReadFile(fsys, p)
+		if readErr != nil {
+			return fmt.Errorf("failed to read %s: %w", p, readErr)
+		}
+
+		file, parseErr := parser.ParseFile(fset, p, data, parser.ParseComments)
+		if parseErr != nil {
+			return fmt.Errorf("failed to parse %s: %w", p, parseErr)
+		}
+
+		pkgName := file.Name.Name
+		pkgFiles[pkgName] = append(pkgFiles[pkgName], file)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for pkgName, files := range pkgFiles {
+		pi := newPackageInfo(pkgName)
+
+		for _, file := range files {
+			inspectFile(file, pi, opts.SkipFilesWithContentsRegex)
+		}
+
+		results.Packages[pi.Name] = pi
+	}
+
+	return results, nil
+}
+
+// isGoSourceFile reports whether a path names a Go source file that should be
+// parsed. Test files (ending in _test.go) are excluded to match the default
+// non-test behaviour of ParseDirectory.
+func isGoSourceFile(p string) bool {
+	base := path.Base(p)
+
+	return strings.HasSuffix(base, ".go") && !strings.HasSuffix(base, "_test.go")
+}
+
+// newPackageInfo allocates a PackageInfo with all maps initialised.
+func newPackageInfo(name string) *PackageInfo {
+	return &PackageInfo{
+		Name:         name,
+		Structs:      map[string]*StructInfo{},
+		Functions:    map[string]*FuncInfo{},
+		Interfaces:   map[string]*InterfaceInfo{},
+		Vars:         map[string]*VarInfo{},
+		Constants:    map[string]*ConstantInfo{},
+		DefinedTypes: map[string]*DefinedTypeInfo{},
+		Aliases:      map[string]*AliasTypeInfo{},
+	}
+}
+
+// inspectFile runs the AST dispatch over a single parsed file, populating pi.
+// It returns without modifying pi when any SkipFilesWithContentsRegex matches a
+// comment in the file.
+func inspectFile(file *ast.File, pi *PackageInfo, skipRegexps []*regexp.Regexp) {
+	fileCache := fileCachedData{
+		commentGroups: map[token.Pos]*ast.CommentGroup{},
+		imports:       map[string]*ast.ImportSpec{},
+		packageName:   pi.Name,
+	}
+
+	for i := range file.Comments {
+		for j := range skipRegexps {
+			if skipRegexps[j].MatchString(file.Comments[i].Text()) {
+				return
+			}
+		}
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.ValueSpec:
+			handleValueSpec(node, pi, fileCache)
+		case *ast.FuncDecl:
+			handleFuncDecl(node, pi, fileCache)
+		case *ast.CommentGroup:
+			fileCache.commentGroups[node.End()] = node
+		case *ast.ImportSpec:
+			if node.Name == nil {
+				fileCache.imports[strings.ReplaceAll(node.Path.Value, "\"", "")] = node
+			} else {
+				fileCache.imports[node.Name.Name] = node
+			}
+		case *ast.TypeSpec:
+			handleTypeSpec(node, pi, fileCache)
+		default:
+		}
+
+		return true
+	})
 }
 
 func handleInterfaceType(ts *ast.TypeSpec, node *ast.InterfaceType, pi *PackageInfo, fileCache fileCachedData) {
@@ -688,6 +767,11 @@ func parseTags(tagLit *ast.BasicLit) map[string][]string {
 	return tags
 }
 
+// heredocDelimiter opens and closes a multi-line marker value. A marker whose
+// value is exactly this delimiter begins a heredoc that spans the following
+// comment lines until a line consisting solely of the delimiter closes it.
+const heredocDelimiter = "`"
+
 func markerValues(cg *ast.CommentGroup) map[string]string {
 	if cg == nil {
 		return map[string]string{}
@@ -695,18 +779,56 @@ func markerValues(cg *ast.CommentGroup) map[string]string {
 
 	values := map[string]string{}
 
-	for _, c := range cg.List {
-		txt := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
-		txt = strings.TrimSpace(strings.TrimPrefix(txt, "/*"))
-		txt = strings.TrimSpace(strings.TrimSuffix(txt, "*/"))
+	for i := 0; i < len(cg.List); i++ {
+		txt := cleanCommentText(cg.List[i].Text)
 		parts := strings.SplitN(txt, "=", 2)
-		if len(parts) == 2 {
-			values[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		} else {
-			values[strings.TrimSpace(parts[0])] = ""
+		key := strings.TrimSpace(parts[0])
+
+		if len(parts) != 2 {
+			values[key] = ""
+
+			continue
 		}
 
+		value := strings.TrimSpace(parts[1])
+		if value != heredocDelimiter {
+			values[key] = value
+
+			continue
+		}
+
+		body, consumed := collectHeredoc(cg.List[i+1:])
+		values[key] = body
+		i += consumed
 	}
 
 	return values
+}
+
+// collectHeredoc concatenates comment lines up to the closing delimiter and
+// returns the joined body along with the number of comment lines consumed
+// (including the closing delimiter line). An unterminated heredoc consumes the
+// remaining lines.
+func collectHeredoc(lines []*ast.Comment) (string, int) {
+	body := make([]string, 0, len(lines))
+
+	for idx, c := range lines {
+		txt := cleanCommentText(c.Text)
+		if txt == heredocDelimiter {
+			return strings.Join(body, "\n"), idx + 1
+		}
+		body = append(body, txt)
+	}
+
+	return strings.Join(body, "\n"), len(lines)
+}
+
+// cleanCommentText strips the surrounding comment markers from a single raw
+// comment line and trims surrounding whitespace.
+func cleanCommentText(raw string) string {
+	txt := strings.TrimSpace(strings.TrimPrefix(raw, "//"))
+	txt = strings.TrimSpace(strings.TrimPrefix(txt, "/*"))
+	txt = strings.TrimSpace(strings.TrimSuffix(txt, "*/"))
+
+	return txt
 }
